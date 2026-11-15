@@ -99,6 +99,26 @@ export function extractHypocenterFromText(text: string): { latitude: number | nu
   return { latitude, longitude };
 }
 
+/** ページの共通部分(フッターなど)に出てくる語。地域名に混ざったら、ページの文章を取り込み過ぎている。 */
+const PAGE_CHROME = /(トップへ|ホームページ|ページ|サイトマップ|プライバシー|著作権|お問い合わせ|ご意見|リンク|免責|利用上の注意|ご利用|ナビゲーション|メニュー)/;
+
+/** 地域名として使えそうか。ページのフッター・案内の語や、極端に長い文字列は地域名ではない。 */
+export function isPlausibleAreaName(name: string): boolean {
+  const t = (name || "").trim();
+  if (!t || t.length > 24) return false;
+  if (PAGE_CHROME.test(t)) return false;
+  return true;
+}
+
+/**
+ * ページの本文から、フッター(「このページのトップへ」以降)を切り落とす。
+ * 最後の注記の地域名の並びが、そのままフッターまで続いてしまうのを防ぐ。
+ */
+export function cutAtPageFooter(text: string): string {
+  const m = (text || "").search(/このページのトップへ|気象庁ホームページについて|ホームページについて|サイトマップ/);
+  return m >= 0 ? text.slice(0, m) : text;
+}
+
 /** "50 km" "約10km" "ごく浅い" を km(数値)にする。 */
 export function parseDepthKm(value: unknown): number | null {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;
@@ -325,7 +345,7 @@ export function buildNormalizedEew(event: RawEvent, reports: RawReport[], fallba
   const detectionClock = parseClockOfDay(event.detectionTime);
   const detectionMs = origin && detectionClock != null ? Math.round(resolveIssuedAtMs(detectionClock, origin.ms)) : null;
   if (event.detectionTime && detectionMs == null) warnings.push("地震波検知時刻を解釈できませんでした。");
-  if (!event.detectionTime) warnings.push("地震波検知時刻を取り出せませんでした。リプレイは第1報の少し前から始まります。");
+  if (!event.detectionTime) warnings.push("地震波検知時刻を取り出せませんでした。報の発表時刻は、表の発表時刻(秒単位)を使います。");
 
   const latitude = parseCoordinate(event.latitude);
   const longitude = parseCoordinate(event.longitude);
@@ -357,14 +377,16 @@ export function buildNormalizedEew(event: RawEvent, reports: RawReport[], fallba
       source = "origin+elapsed";
     }
 
+    const rawAreaCount = (report.forecastIntensityByArea || []).filter((a) => a.area).length;
     const areas = (report.forecastIntensityByArea || [])
-      .filter((a) => a.area)
+      .filter((a) => a.area && isPlausibleAreaName(String(a.area)))
       .map((a) => {
         const range = parseIntensityRange(a.expectedMaximumIntensity);
         return { name: String(a.area), minIntensityKey: range.minKey, maxIntensityKey: range.maxKey, openEnded: range.openEnded };
       });
+    if (areas.length < rawAreaCount) warnings.push(`第${report.reportNumber ?? index + 1}報: 地域名として不自然な項目(ページの案内文など)を${rawAreaCount - areas.length}件除きました。`);
     const longPeriod = (report.forecastLongPeriodByArea || [])
-      .filter((a) => a.area && typeof a.expectedLongPeriodClass === "number")
+      .filter((a) => a.area && isPlausibleAreaName(String(a.area)) && typeof a.expectedLongPeriodClass === "number")
       .map((a) => ({ name: String(a.area), grade: Number(a.expectedLongPeriodClass) }));
 
     const serial = report.reportNumber ?? index + 1;

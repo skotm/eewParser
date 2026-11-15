@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {
   parseCoordinate, parseDepthKm, parseMagnitude, intensityToKey, parseIntensityRange,
-  parseOriginTime, parseClockOfDay, extractHypocenterFromText, resolveIssuedAtMs, toJstIso, buildNormalizedEew, eewFileName,
+  parseOriginTime, parseClockOfDay, extractHypocenterFromText, isPlausibleAreaName, cutAtPageFooter, resolveIssuedAtMs, toJstIso, buildNormalizedEew, eewFileName,
 } from "../src/eewExport.ts";
 
 let n = 0;
@@ -90,7 +90,7 @@ t("全体の組み立て(スキーマ例どおりの入力)", () => {
   assert.equal(out.reports[1].maxIntensityKey, "5+");
   assert.deepEqual(out.reports[0].longPeriod, [{ name: "茨城県南部", grade: 1 }]);
   // 検知時刻の無い入力なので、その旨の警告だけが出る
-  assert.deepEqual(out.warnings, ["地震波検知時刻を取り出せませんでした。リプレイは第1報の少し前から始まります。"]);
+  assert.deepEqual(out.warnings, ["地震波検知時刻を取り出せませんでした。報の発表時刻は、表の発表時刻(秒単位)を使います。"]);
   assert.equal(eewFileName(out.event, "x"), "20260823_茨城県南部M5.9.eew.json");
 });
 t("欠落時は推測せず警告", () => {
@@ -162,5 +162,22 @@ t("地震波検知時刻+経過秒で発表時刻を決める", () => {
   assert.equal(none.event.detectionTimeMs, null);
   assert.equal(none.reports[0].issuedAtSource, "providedAt");
   assert.ok(none.warnings.some((w) => w.includes("地震波検知時刻")));
+});
+t("対象地域にページの案内文が混ざらない", () => {
+  assert.equal(isPlausibleAreaName("宮城県北部"), true);
+  assert.equal(isPlausibleAreaName("東北"), true);
+  assert.equal(isPlausibleAreaName("このページのトップへ"), false);
+  assert.equal(isPlausibleAreaName("気象庁ホームページについて"), false);
+  assert.equal(isPlausibleAreaName(""), false);
+  assert.equal(isPlausibleAreaName("あ".repeat(30)), false);
+  assert.equal(cutAtPageFooter("※1 震度6弱 東北、関東 このページのトップへ 気象庁ホームページについて"), "※1 震度6弱 東北、関東 ");
+  const out = buildNormalizedEew(
+    { id: "e", occurredAt: "2011/03/11 14:46" },
+    [{ reportNumber: 15, providedAt: "14時46分50秒", forecastIntensityByArea: [
+      { area: "東北", expectedMaximumIntensity: "6弱" }, { area: "このページのトップへ", expectedMaximumIntensity: "6弱" }, { area: "気象庁ホームページについて", expectedMaximumIntensity: "6弱" }],
+      forecastLongPeriodByArea: [{ area: "このページのトップへ", expectedLongPeriodClass: 1 }] }]);
+  assert.deepEqual(out.reports[0].areas.map((a) => a.name), ["東北"]);
+  assert.deepEqual(out.reports[0].longPeriod, []);
+  assert.ok(out.warnings.some((w) => w.includes("不自然")));
 });
 console.log(`${n} tests passed`);

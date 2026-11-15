@@ -1,5 +1,5 @@
 import { ChangeEvent, useMemo, useState } from "react";
-import { buildNormalizedEew, eewFileName, extractHypocenterFromText, parseCoordinate } from "./eewExport";
+import { buildNormalizedEew, cutAtPageFooter, eewFileName, extractHypocenterFromText, isPlausibleAreaName, parseCoordinate } from "./eewExport";
 
 type Period = "all" | "new" | "old";
 type EventItem = {
@@ -202,7 +202,8 @@ type ForecastBlock = {
 };
 
 function parseForecastBlocks(text: string) {
-  const normalized = text
+  // フッター(「このページのトップへ」以降)は注記ではないので、地域名の並びに入らないよう切り落とす。
+  const normalized = cutAtPageFooter(text)
     .replace(/[０-９]/g, (digit) => String.fromCharCode(digit.charCodeAt(0) - 0xFEE0))
     .replace(/\r\n?/g, "\n")
     .replace(/[\t\u00a0]+/g, " ");
@@ -214,7 +215,7 @@ function parseForecastBlocks(text: string) {
     .replace(/長周期地震動階級[0-3]?[\s\S]*$/g, "")
     .split(/[、,，\n]+/)
     .map((name) => clean(name).replace(/^[：:]\s*/, "").trim())
-    .filter((name) => Boolean(name) && !/^(?:以上|程度|程度以上)$/.test(name));
+    .filter((name) => Boolean(name) && !/^(?:以上|程度|程度以上)$/.test(name) && isPlausibleAreaName(name));
 
   while ((markerMatch = markerRegex.exec(normalized)) !== null) {
     const marker = markerMatch[1];
@@ -242,7 +243,7 @@ function parseForecastBlocks(text: string) {
       const areaText = longPeriodMatch[2]
         .replace(/震度[0-7][\s\S]*$/g, "")
         .trim();
-      for (const area of areaText.split(/[、,，\n]+/).map((name) => clean(name)).filter(Boolean)) {
+      for (const area of areaText.split(/[、,，\n]+/).map((name) => clean(name)).filter((name) => Boolean(name) && isPlausibleAreaName(name))) {
         if (!longPeriod.some((item) => item.area === area && item.expectedLongPeriodClass === grade)) {
           longPeriod.push({ area, expectedLongPeriodClass: grade });
         }
@@ -549,7 +550,7 @@ export default function App() {
           indexUrl: INDEX_URL,
           detailUrl: selected.detailUrl,
           retrievedAt: new Date().toISOString(),
-          parserVersion: "0.4.2"
+          parserVersion: "0.4.3"
         },
         event: eventForExport,
         reports: parsed.reportGroups,
