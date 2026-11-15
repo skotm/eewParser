@@ -48,6 +48,56 @@ export function parseCoordinate(value: unknown): number | null {
   return negative ? -result : result;
 }
 
+/**
+ * ページの文章から震源の緯度・経度を探す(表のラベルと値の対応から取れなかった時の予備)。
+ *   "北緯36.1度" "北緯36度06.0分" "緯度 36.1" "36.1°N" "N36.1" など。経度も同様(東経/西経/E/W)。
+ * 文章全体を探すので、範囲外(緯度0〜90・経度0〜180以外)の値は採用しない。
+ * 北緯・東経の表記が見つからなければnull(推測しない)。
+ */
+export function extractHypocenterFromText(text: string): { latitude: number | null; longitude: number | null } {
+  // 空白は詰めず1つにまとめる("N36.1 E139.9" のように、緯度と経度の境目を空白で見分けるため)。
+  const t = (text || "")
+    .replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xfee0))
+    .replace(/[．]/g, ".")
+    .replace(/[\s\u00a0]+/g, " ");
+  const pick = (
+    kanji: RegExp, // (北緯|南緯)(度)(分)
+    labelOnly: RegExp, // 緯度 36.1
+    letterA: RegExp, // 36.1°N
+    letterB: RegExp, // N36.1
+    negativeKanji: string, negativeLetter: string, max: number,
+  ): number | null => {
+    const ok = (v: number) => Number.isFinite(v) && v >= 0 && v <= max;
+    let m = t.match(kanji);
+    if (m) {
+      const v = Number(m[2]) + (m[3] ? Number(m[3]) / 60 : 0);
+      if (ok(v)) return m[1] === negativeKanji ? -v : v;
+    }
+    m = t.match(labelOnly);
+    if (m && ok(Number(m[1]))) return Number(m[1]);
+    m = t.match(letterA);
+    if (m && ok(Number(m[1]))) return m[2] === negativeLetter ? -Number(m[1]) : Number(m[1]);
+    m = t.match(letterB);
+    if (m && ok(Number(m[2]))) return m[1] === negativeLetter ? -Number(m[2]) : Number(m[2]);
+    return null;
+  };
+  const latitude = pick(
+    /(北緯|南緯)\s*(\d+(?:\.\d+)?)\s*度\s*(?:(\d+(?:\.\d+)?)\s*分)?/,
+    /緯度[^\d]{0,6}(\d+(?:\.\d+)?)/,
+    /(?<![\d.])(\d+(?:\.\d+)?)°?([NS])(?![A-Za-z])/,
+    /(?<![A-Za-z])([NS])(\d+(?:\.\d+)?)(?![A-Za-z\d.])/,
+    "南緯", "S", 90,
+  );
+  const longitude = pick(
+    /(東経|西経)\s*(\d+(?:\.\d+)?)\s*度\s*(?:(\d+(?:\.\d+)?)\s*分)?/,
+    /経度[^\d]{0,6}(\d+(?:\.\d+)?)/,
+    /(?<![\d.])(\d+(?:\.\d+)?)°?([EW])(?![A-Za-z])/,
+    /(?<![A-Za-z])([EW])(\d+(?:\.\d+)?)(?![A-Za-z\d.])/,
+    "西経", "W", 180,
+  );
+  return { latitude, longitude };
+}
+
 /** "50 km" "約10km" "ごく浅い" を km(数値)にする。 */
 export function parseDepthKm(value: unknown): number | null {
   if (typeof value === "number") return Number.isFinite(value) ? value : null;

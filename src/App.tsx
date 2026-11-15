@@ -1,5 +1,5 @@
 import { ChangeEvent, useMemo, useState } from "react";
-import { buildNormalizedEew, eewFileName } from "./eewExport";
+import { buildNormalizedEew, eewFileName, extractHypocenterFromText, parseCoordinate } from "./eewExport";
 
 type Period = "all" | "new" | "old";
 type EventItem = {
@@ -288,6 +288,8 @@ function parseReportGroups(rows: ParsedTableRow[], doc: Document) {
   });
 }
 
+const LABEL_ONLY = /^(地震発生日時|発生日時|震央地名|震央|北緯|東経|緯度|経度|深さ|マグニチュード|最大震度)$/;
+
 function parseDetailDocument(doc: Document) {
   const allRows: ParsedTableRow[] = [];
   const eventDetails: Record<string, string> = {};
@@ -325,7 +327,9 @@ function parseDetailDocument(doc: Document) {
         const headerIndex = headerCells.findIndex((header) => pattern.test(header));
         if (headerIndex >= 0 && valueCells[headerIndex]) {
           const value = clean(valueCells[headerIndex]);
-          if (value && !pattern.test(value)) {
+          // 値が見出しそのもの(別の見出し行)なら採用しない。「北緯36.1度」のように値の中にラベル語を
+          // 含むものは、そのまま値として採用する(以前はラベル語を含むだけで捨てていたため、緯度・経度が取れなかった)。
+          if (value && normalizeLabel(value) !== headerCells[headerIndex] && !LABEL_ONLY.test(normalizeLabel(value))) {
             eventDetails[key] = value;
             matchedFields++;
           }
@@ -390,6 +394,16 @@ function parseDetailDocument(doc: Document) {
     }
     notes.push("地震諸元は表のラベル・値対応から抽出できなかった項目がある可能性があります。");
   }
+  // 緯度・経度が表のラベルと値の対応から取れなかった(または数値にできない)時は、ページ内の
+  // 「北緯◯度」「東経◯度」などの表記から探す。再生には震源の位置が必須のため。
+  if (parseCoordinate(eventDetails.latitude) == null || parseCoordinate(eventDetails.longitude) == null) {
+    const allText = allRows.map((row) => row.cells.join(" ")).join(" ") + " " + (doc.body?.textContent || "");
+    const found = extractHypocenterFromText(allText);
+    let used = false;
+    if (parseCoordinate(eventDetails.latitude) == null && found.latitude != null) { eventDetails.latitude = String(found.latitude); used = true; }
+    if (parseCoordinate(eventDetails.longitude) == null && found.longitude != null) { eventDetails.longitude = String(found.longitude); used = true; }
+    if (used) notes.push("緯度・経度は表の見出しと対応づけられなかったため、ページ内の「北緯・東経」などの表記から抽出しました。");
+  }
   const reportGroups = parseReportGroups(allRows, doc);
   if (!reportGroups.length) {
     notes.push("報ごとの表行を特定できませんでした。注記だけから報番号を推定せず、reportsは空配列にしています。");
@@ -407,6 +421,8 @@ function parseDetailDocument(doc: Document) {
   };
 }
 
+type ParsedDetail = ReturnType<typeof parseDetailDocument>;
+
 export default function App() {
   const [events, setEvents] = useState<EventItem[]>([]);
   const [selectedId, setSelectedId] = useState("");
@@ -419,6 +435,9 @@ export default function App() {
   const [jsonText, setJsonText] = useState("");
   const [exportName, setExportName] = useState("");
   const [exportWarnings, setExportWarnings] = useState<string[]>([]);
+  const [parsedDetail, setParsedDetail] = useState<{ parsed: ParsedDetail; selectedId: string } | null>(null);
+  const [manualLat, setManualLat] = useState("");
+  const [manualLon, setManualLon] = useState("");
   const [indexDiagnostics, setIndexDiagnostics] = useState<Record<string, unknown> | null>(null);
 
   const visibleEvents = useMemo(() => events.filter((event) => {
@@ -473,34 +492,27 @@ export default function App() {
     event.target.value = "";
   }
 
-  async function importDetail(file?: File) {
-    if (!selected) return;
-    setBusy(true); setError("");
-    try {
-      let html: string;
-      if (file) html = await file.text();
-      else {
-        const response = await fetch(selected.detailUrl, { mode: "cors" });
-        if (!response.ok) throw new Error("HTTP " + response.status);
-        html = await response.text();
-      }
-      const doc = new DOMParser().parseFromString(html, "text/html");
-      const parsed = parseDetailDocument(doc);
+  // 解析結果(parsed)から、保存用のJSON・ファイル名・警告を組み立てる。
+  // 緯度・経度が取れなかった場合は、手入力の値(manualLat / manualLon)で補う。
+  function buildExport(parsed: ParsedDetail, selected: EventItem, manualLat: string, manualLon: string) {
+    const pickCoord = (parsedValue: string | undefined, manual: string) =>
+      parseCoordinate(parsedValue) == null && manual.trim() ? manual.trim() : (parsedValue || null);
       // MeteoQuakeで再生するための正規化済みデータ(数値・絶対時刻・震度キー)。
       // 既存のフィールドは変えず、normalizedとして追加するだけにしている。
       const eventForExport = {
         id: selected.id,
         occurredAt: parsed.eventDetails.occurredAt || selected.date,
         hypocenterName: parsed.eventDetails.hypocenterName || selected.name,
-        latitude: parsed.eventDetails.latitude || null,
-        longitude: parsed.eventDetails.longitude || null,
+        latitude: pickCoord(parsed.eventDetails.latitude, manualLat),
+        longitude: pickCoord(parsed.eventDetails.longitude, manualLon),
         depth: parsed.eventDetails.depth || null,
         magnitude: parsed.eventDetails.magnitude || selected.magnitude || null,
         observedMaximumIntensity: parsed.eventDetails.observedMaximumIntensity || selected.intensity || null
       };
       const normalized = buildNormalizedEew(eventForExport, parsed.reportGroups, selected.date);
       setExportName(eewFileName(normalized.event, selected.id));
-      setExportWarnings(normalized.warnings);
+      const manualUsed = (manualLat && parseCoordinate(parsed.eventDetails.latitude) == null) || (manualLon && parseCoordinate(parsed.eventDetails.longitude) == null);
+      setExportWarnings(manualUsed ? ["震源の緯度・経度は手入力の値です。公式ページと照合してください。", ...normalized.warnings] : normalized.warnings);
       const json = {
         schemaVersion: "1.2.0",
         source: {
@@ -528,6 +540,24 @@ export default function App() {
         }
       };
       setJsonText(JSON.stringify(json, null, 2));
+  }
+
+  async function importDetail(file?: File) {
+    if (!selected) return;
+    setBusy(true); setError("");
+    try {
+      let html: string;
+      if (file) html = await file.text();
+      else {
+        const response = await fetch(selected.detailUrl, { mode: "cors" });
+        if (!response.ok) throw new Error("HTTP " + response.status);
+        html = await response.text();
+      }
+      const doc = new DOMParser().parseFromString(html, "text/html");
+      const parsed = parseDetailDocument(doc);
+      setParsedDetail({ parsed, selectedId: selected.id });
+      setManualLat(""); setManualLon("");
+      buildExport(parsed, selected, "", "");
       setStatus("地震諸元と報ごとの予想震度を解析しました。抽出できない項目は推測せず、元表も保持しています。");
     } catch (cause) {
       setError((cause instanceof Error ? cause.message : "詳細ページを取得できませんでした。") +
@@ -572,7 +602,7 @@ export default function App() {
         <div className="filters">{([{ value: "all", label: "すべて" }, { value: "new", label: "2023年以降" }, { value: "old", label: "2023年以前" }] as const).map((item) =>
           <button key={item.value} className={period === item.value ? "filter active" : "filter"} onClick={() => setPeriod(item.value)}>{item.label}</button>)}</div>
         {visibleEvents.length ? <div className="event-list">{visibleEvents.map((item) =>
-          <button key={item.id} className={selectedId === item.id ? "event selected" : "event"} onClick={() => { setSelectedId(item.id); setJsonText(""); setExportWarnings([]); }}>
+          <button key={item.id} className={selectedId === item.id ? "event selected" : "event"} onClick={() => { setSelectedId(item.id); setJsonText(""); setExportWarnings([]); setParsedDetail(null); }}>
             <div className="event-meta"><span>{formatDate(item.date)}</span><span>M {item.magnitude || "—"}</span></div>
             <strong>{item.name}</strong><div className="event-bottom"><span>観測最大震度</span><b>{item.intensity || "未掲載"}</b></div>
           </button>)}</div> : <div className="empty"><strong>{events.length ? "一致する事例がありません" : "事例データがありません"}</strong><p>{events.length ? "検索語や期間フィルターを変更してください。" : "気象庁の一覧を読み込むか、保存したHTMLを選択してください。"}</p></div>}
@@ -590,6 +620,25 @@ export default function App() {
             <a href={selected.detailUrl} target="_blank" rel="noreferrer">公開ページを開く ↗</a></div>
           <div className="note">解析後の表行は、JSONプレビューで確認してください。予想震度は各報ごとにまとめ、元表もJSONに保持します。解析結果は公式ページと照合してください。</div>
         </> : <div className="empty"><strong>事例を選択してください</strong><p>左側の一覧から対象を選びます。</p></div>}
+        {jsonText && parsedDetail && selected && parsedDetail.selectedId === selected.id && (() => {
+          const d = parsedDetail.parsed.eventDetails;
+          const missing = parseCoordinate(d.latitude) == null || parseCoordinate(d.longitude) == null;
+          const coordRows = parsedDetail.parsed.reports.filter((row) => row.cells.some((cell) => /緯|経|北|東/.test(cell))).slice(0, 12);
+          return <>
+            {missing && <div className="note" role="alert">
+              <b>震源の緯度・経度を取得できませんでした</b>
+              <p>このままではMeteoQuakeで再生できません。公式ページを見て、緯度・経度を数値(度)で入力してください。</p>
+              <div className="url-row">
+                <input aria-label="緯度" placeholder="緯度 例: 36.1" value={manualLat} onChange={(e) => setManualLat(e.target.value)} />
+                <input aria-label="経度" placeholder="経度 例: 139.9" value={manualLon} onChange={(e) => setManualLon(e.target.value)} />
+                <button className="primary" onClick={() => buildExport(parsedDetail.parsed, selected, manualLat, manualLon)}>反映</button>
+              </div>
+            </div>}
+            <details className="note"><summary>諸元の抽出診断(緯度・経度が取れない時の調査用)</summary>
+              <pre>{JSON.stringify({ eventDetails: d, 緯度経度らしいセルを含む行: coordRows.map((row) => ({ table: row.tableNumber, row: row.rowNumber, cells: row.cells })) }, null, 2)}</pre>
+            </details>
+          </>;
+        })()}
         {jsonText && exportWarnings.length > 0 && <div className="note" role="alert"><b>確認が必要な点({exportWarnings.length}件)</b><ul>{exportWarnings.map((w, i) => <li key={i}>{w}</li>)}</ul></div>}
         {jsonText && <div className="json-preview"><div className="json-title"><div><p className="eyebrow">JSON PREVIEW</p><h3>変換結果</h3></div><button className="primary" onClick={downloadJson}>MeteoQuake用 .eew.json を保存 ↓</button></div><pre>{jsonText}</pre></div>}
       </section>

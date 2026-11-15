@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {
   parseCoordinate, parseDepthKm, parseMagnitude, intensityToKey, parseIntensityRange,
-  parseOriginTime, parseClockOfDay, resolveIssuedAtMs, toJstIso, buildNormalizedEew, eewFileName,
+  parseOriginTime, parseClockOfDay, extractHypocenterFromText, resolveIssuedAtMs, toJstIso, buildNormalizedEew, eewFileName,
 } from "../src/eewExport.ts";
 
 let n = 0;
@@ -104,5 +104,16 @@ t("elapsedのみの報は発生時刻+経過秒", () => {
   const out = buildNormalizedEew({ id: "e", occurredAt: "2026-08-23T02:00:00+09:00" }, [{ reportNumber: 1, elapsedSeconds: 12.5, forecastIntensityByArea: [{ area: "A", expectedMaximumIntensity: "3" }] }]);
   assert.equal(out.reports[0].issuedAtSource, "origin+elapsed");
   assert.equal(out.reports[0].issuedAtIso, "2026-08-23T02:00:12.500+09:00");
+});
+t("文章から震源の緯度経度を探す", () => {
+  assert.deepEqual(extractHypocenterFromText("震央地名 茨城県南部 北緯36.1度 東経139.9度 深さ50km"), { latitude: 36.1, longitude: 139.9 });
+  assert.deepEqual(extractHypocenterFromText("北緯 36度06.0分 東経 139度54.0分"), { latitude: 36.1, longitude: 139.9 });
+  assert.deepEqual(extractHypocenterFromText("緯度:36.1 経度:139.9"), { latitude: 36.1, longitude: 139.9 });
+  assert.deepEqual(extractHypocenterFromText("36.1°N 139.9°E"), { latitude: 36.1, longitude: 139.9 });
+  assert.deepEqual(extractHypocenterFromText("N36.1 E139.9"), { latitude: 36.1, longitude: 139.9 });
+  assert.deepEqual(extractHypocenterFromText("南緯10.0度 西経120.5度"), { latitude: -10, longitude: -120.5 });
+  assert.deepEqual(extractHypocenterFromText("北緯９９度 東経139.9度"), { latitude: null, longitude: 139.9 });
+  assert.deepEqual(extractHypocenterFromText("NHK DOCTYPE html 2026"), { latitude: null, longitude: null });
+  assert.deepEqual(extractHypocenterFromText(""), { latitude: null, longitude: null });
 });
 console.log(`${n} tests passed`);
