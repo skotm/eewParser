@@ -260,9 +260,13 @@ function parseForecastBlocks(text: string) {
 
 function parseReportGroups(rows: ParsedTableRow[], doc: Document) {
   const forecastBlocks = parseForecastBlocks(doc.body?.innerText || doc.body?.textContent || "");
+  const isElapsedCell = (cell?: string) => !!cell && /^\d+(?:\.\d+)?$/.test(cell.replace(/[０-９]/g, (digit) => String.fromCharCode(digit.charCodeAt(0) - 0xFEE0)));
   const candidates = rows.filter((row) => {
     const rowText = row.cells.join(" | ");
-    return /※\s*\d+/.test(rowText) && /\d{1,2}時\d{1,2}分/.test(rowText);
+    if (!/\d{1,2}時\d{1,2}分/.test(rowText)) return false;
+    if (/※\s*\d+/.test(rowText)) return true;
+    // 予測震度の注記(※)が無いキャンセル報の行。地震の概要の行などと区別するため、経過時間(秒)の列が数値の行に限る。
+    return /キャンセル|取消/.test(rowText) && isElapsedCell(row.cells[2]);
   });
 
   // A footnote marker alone is not enough to prove which report it belongs to.
@@ -271,6 +275,14 @@ function parseReportGroups(rows: ParsedTableRow[], doc: Document) {
     const rowText = row.cells.join(" | ");
     const marker = rowText.match(/※\s*(\d+)/)?.[1] || "";
     const time = rowText.match(/\d{1,2}時\d{1,2}分(?:\d+(?:\.\d+)?秒)?/)?.[0] || null;
+    // 震源要素(北緯・東経・深さ・マグニチュード)は、表の見出しの並び(経過時間→震源要素→予測震度)から、
+    // 予測震度のセル(※を含むセル)の直前の4セルとみなす。緯度・経度として読めない時は取り出さない。
+    const markerCellIndex = row.cells.findIndex((cell) => /※\s*\d+/.test(cell));
+    let hypocenter: { latitude: string; longitude: string; depth: string; magnitude: string } | null = null;
+    if (markerCellIndex >= 4) {
+      const [latitude, longitude, depth, magnitude] = row.cells.slice(markerCellIndex - 4, markerCellIndex);
+      if (parseCoordinate(latitude) != null && parseCoordinate(longitude) != null) hypocenter = { latitude, longitude, depth, magnitude };
+    }
     const reportNumberCell = row.cells[0]?.match(/^\d+$/)?.[0];
     const elapsedCell = row.cells[2]?.replace(/[０-９]/g, (digit) => String.fromCharCode(digit.charCodeAt(0) - 0xFEE0));
     const elapsed = elapsedCell?.match(/^\d+(?:\.\d+)?$/)?.[0];
@@ -279,6 +291,8 @@ function parseReportGroups(rows: ParsedTableRow[], doc: Document) {
       reportNumber: reportNumberCell ? Number(reportNumberCell) : index + 1,
       elapsedSeconds: elapsed ? Number(elapsed) : null,
       providedAt: time,
+      hypocenter,
+      isCancel: /キャンセル|取消/.test(rowText),
       forecastReference: marker ? "※" + marker : null,
       forecastIntensityByArea: forecastBlocks.get(marker)?.intensity || [],
       forecastLongPeriodByArea: forecastBlocks.get(marker)?.longPeriod || [],
@@ -322,20 +336,25 @@ function parseDetailDocument(doc: Document) {
     for (let rowIndex = 0; rowIndex < rows.length - 1; rowIndex++) {
       const headerCells = rows[rowIndex].map(normalizeLabel);
       const valueCells = rows[rowIndex + 1];
-      let matchedFields = 0;
+      // 見出し行と値の行の組から、地震諸元を集める。3項目以上そろった組だけを採用し、
+      // すでに取れている項目は上書きしない(最初の表=「発生した地震の概要」を優先する)。
+      // 後ろの表(報ごとの震源要素の見出しなど)の値で上書きすると、緯度・経度が壊れるため。
+      const found: Record<string, string> = {};
       fieldAliases.forEach(([pattern, key]) => {
         const headerIndex = headerCells.findIndex((header) => pattern.test(header));
         if (headerIndex >= 0 && valueCells[headerIndex]) {
           const value = clean(valueCells[headerIndex]);
           // 値が見出しそのもの(別の見出し行)なら採用しない。「北緯36.1度」のように値の中にラベル語を
-          // 含むものは、そのまま値として採用する(以前はラベル語を含むだけで捨てていたため、緯度・経度が取れなかった)。
+          // 含むものは、そのまま値として採用する。
           if (value && normalizeLabel(value) !== headerCells[headerIndex] && !LABEL_ONLY.test(normalizeLabel(value))) {
-            eventDetails[key] = value;
-            matchedFields++;
+            found[key] = value;
           }
         }
       });
-      if (matchedFields >= 3) break;
+      if (Object.keys(found).length >= 3) {
+        for (const [key, value] of Object.entries(found)) if (!(key in eventDetails)) eventDetails[key] = value;
+        break;
+      }
     }
 
     rows.forEach((cells, rowIndex) => {
@@ -357,7 +376,7 @@ function parseDetailDocument(doc: Document) {
         const label = normalizeLabel(cells[0]);
         const alias = fieldAliases.find(([pattern]) => pattern.test(label));
         if (alias && cells[1] && !/^(地震発生日時|震央地名|北緯|東経|深さ|マグニチュード|最大震度)$/.test(normalizeLabel(cells[1]))) {
-          eventDetails[alias[1]] = cells.slice(1).join(" | ");
+          if (!(alias[1] in eventDetails)) eventDetails[alias[1]] = cells.slice(1).join(" | ");
         }
       }
     });
@@ -520,7 +539,7 @@ export default function App() {
           indexUrl: INDEX_URL,
           detailUrl: selected.detailUrl,
           retrievedAt: new Date().toISOString(),
-          parserVersion: "0.4.0"
+          parserVersion: "0.4.1"
         },
         event: eventForExport,
         reports: parsed.reportGroups,

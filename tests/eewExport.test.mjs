@@ -116,4 +116,28 @@ t("文章から震源の緯度経度を探す", () => {
   assert.deepEqual(extractHypocenterFromText("NHK DOCTYPE html 2026"), { latitude: null, longitude: null });
   assert.deepEqual(extractHypocenterFromText(""), { latitude: null, longitude: null });
 });
+t("気象庁の表の表記: 度°分′・和暦・キャンセル報", () => {
+  assert.ok(Math.abs(parseCoordinate("51°59.1′") - (51 + 59.1 / 60)) < 1e-9);
+  assert.ok(Math.abs(parseCoordinate("157°16.2′") - (157 + 16.2 / 60)) < 1e-9);
+  assert.equal(parseDepthKm("135km"), 135);
+  const o = parseOriginTime("令和 8年10月16日12時38分");
+  assert.equal(o.ms, Date.UTC(2026, 9, 16, 3, 38, 0));
+  assert.equal(parseOriginTime("令和元年5月1日0時0分").ms, Date.UTC(2019, 3, 30, 15, 0, 0));
+  assert.equal(parseOriginTime("平成23年3月11日14時46分").ms, Date.UTC(2011, 2, 11, 5, 46, 0));
+  const out = buildNormalizedEew(
+    { id: "e", occurredAt: "令和 8年10月16日12時38分", hypocenterName: "カムチャツカ半島付近(キャンセル報)", latitude: "51°59.1′", longitude: "157°16.2′", depth: "135km", magnitude: "6.9", observedMaximumIntensity: "１" },
+    [{ reportNumber: 1, providedAt: "12時38分20秒", hypocenter: { latitude: "51°59.1′", longitude: "157°16.2′", depth: "--", magnitude: "6.9" },
+       forecastIntensityByArea: [{ area: "根室地方北部", expectedMaximumIntensity: "from5弱to7" }] },
+     { reportNumber: 2, providedAt: "12時38分40秒", isCancel: true, forecastIntensityByArea: [] }]);
+  assert.equal(out.event.hypocenterName, "カムチャツカ半島付近");
+  assert.equal(out.event.isCancelEvent, true);
+  assert.ok(Math.abs(out.event.latitude - 51.985) < 0.001);
+  assert.equal(out.event.depthKm, 135);
+  assert.equal(out.event.originTimeIso, "2026-10-16T12:38:00+09:00");
+  assert.equal(out.reports[0].hypocenter.magnitude, 6.9);
+  assert.equal(out.reports[0].hypocenter.depthKm, null);
+  assert.equal(out.reports[1].isCancel, true);
+  assert.equal(out.reports[0].issuedAtIso, "2026-10-16T12:38:20+09:00");
+  assert.equal(out.reports[0].maxIntensityKey, "7");
+});
 console.log(`${n} tests passed`);

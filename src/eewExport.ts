@@ -36,7 +36,8 @@ export function parseCoordinate(value: unknown): number | null {
   const text = toHalfWidth(value);
   if (!text) return null;
   const negative = /南緯|西経/.test(text) || /^[-]/.test(text);
-  const dms = text.match(/(\d+(?:\.\d+)?)度(\d+(?:\.\d+)?)分/);
+  // "36度06.0分" のほか、気象庁の表の "51°59.1′" (度°分′)も扱う。
+  const dms = text.match(/(\d+(?:\.\d+)?)[度°](\d+(?:\.\d+)?)[分′'’]/);
   let result: number | null = null;
   if (dms) {
     result = Number(dms[1]) + Number(dms[2]) / 60;
@@ -182,10 +183,15 @@ export type OriginTime = { ms: number; precision: "second" | "minute" };
 export function parseOriginTime(value: unknown): OriginTime | null {
   if (typeof value !== "string") return null;
   // 日付と時刻の区切り(空白・T)を残したまま解釈する(空白を詰めると「23 02:00」が「2302:00」になり曖昧になる)。
-  const text = value
+  let text = value
     .replace(/[０-９]/g, (d) => String.fromCharCode(d.charCodeAt(0) - 0xfee0))
     .replace(/[．]/g, ".")
     .trim();
+  // 和暦("令和 8年10月16日12時38分")は西暦に直してから解釈する。
+  text = text.replace(/(令和|平成|昭和)\s*(元|\d+)\s*年/, (_all, era: string, y: string) => {
+    const base = era === "令和" ? 2018 : era === "平成" ? 1988 : 1925;
+    return `${base + (y === "元" ? 1 : Number(y))}年`;
+  });
   const m = text.match(/(\d{4})\s*[年\/-]\s*(\d{1,2})\s*[月\/-]\s*(\d{1,2})\s*日?[\sT]*(\d{1,2})\s*[時:]\s*(\d{1,2})(?:\s*[分:]\s*(\d{1,2}(?:\.\d+)?)?)?\s*秒?\s*(Z|[+-]\d{2}:?\d{2})?/);
   if (!m) return null;
   const [, y, mo, d, h, mi, s, tz] = m;
@@ -231,8 +237,19 @@ export function toJstIso(ms: number): string {
 
 /* ───────── 入力(JmaEewParserが組み立てる既存JSONの該当部分) ───────── */
 
+export type RawHypocenter = {
+  latitude?: string | number | null;
+  longitude?: string | number | null;
+  depth?: string | number | null;
+  magnitude?: string | number | null;
+};
+
 export type RawReport = {
   reportNumber?: number | null;
+  /** その報の震源要素(北緯・東経・深さ・M)。表から取れた時だけ入る。 */
+  hypocenter?: RawHypocenter | null;
+  /** キャンセル報(取消)の行か。 */
+  isCancel?: boolean;
   elapsedSeconds?: number | null;
   providedAt?: string | null;
   forecastIntensityByArea?: Array<{ area?: string; expectedMaximumIntensity?: string }>;
@@ -260,6 +277,10 @@ export type NormalizedReport = {
   /** 最後の報を最終報として扱う(公開履歴には「最終」の明示が無いため)。 */
   isFinal: boolean;
   maxIntensityKey: IntensityKey | null;
+  /** その報の震源(数値)。無ければnull(その場合はevent側の震源を使う)。 */
+  hypocenter: { latitude: number | null; longitude: number | null; depthKm: number | null; magnitude: number | null } | null;
+  /** キャンセル報(取消)か。 */
+  isCancel: boolean;
   areas: Array<{ name: string; minIntensityKey: IntensityKey | null; maxIntensityKey: IntensityKey | null; openEnded: boolean }>;
   longPeriod: Array<{ name: string; grade: number }>;
 };
@@ -277,6 +298,8 @@ export type NormalizedEew = {
     depthKm: number | null;
     magnitude: number | null;
     observedMaxIntensityKey: IntensityKey | null;
+    /** 事例全体が「キャンセル報」として公開されているか(震央地名の「(キャンセル報)」から判定)。 */
+    isCancelEvent: boolean;
   };
   reports: NormalizedReport[];
   warnings: string[];
@@ -291,7 +314,11 @@ export function buildNormalizedEew(event: RawEvent, reports: RawReport[], fallba
 
   const latitude = parseCoordinate(event.latitude);
   const longitude = parseCoordinate(event.longitude);
-  if (latitude == null || longitude == null) warnings.push("震源の緯度・経度を数値にできませんでした。");
+  const rawName = typeof event.hypocenterName === "string" ? event.hypocenterName : "";
+  const isCancelEvent = /キャンセル報|取消/.test(rawName);
+  const cleanName = rawName.replace(/[(（]\s*(?:キャンセル報|取消[^)）]*)\s*[)）]/g, "").trim();
+  const reportsHaveHypocenter = reports.some((r) => r.hypocenter && parseCoordinate(r.hypocenter.latitude) != null && parseCoordinate(r.hypocenter.longitude) != null);
+  if ((latitude == null || longitude == null) && !reportsHaveHypocenter) warnings.push("震源の緯度・経度を数値にできませんでした。");
 
   const sorted = [...reports].sort((a, b) => (a.reportNumber ?? 0) - (b.reportNumber ?? 0));
   const out: NormalizedReport[] = sorted.map((report, index) => {
@@ -321,8 +348,16 @@ export function buildNormalizedEew(event: RawEvent, reports: RawReport[], fallba
     if (!areas.length) warnings.push(`第${serial}報: 予報区ごとの予想震度を取り出せませんでした。`);
     if (issuedAtMs == null) warnings.push(`第${serial}報: 発表時刻を決められませんでした。`);
 
+    const h = report.hypocenter;
+    const hypocenter = h
+      ? { latitude: parseCoordinate(h.latitude), longitude: parseCoordinate(h.longitude), depthKm: parseDepthKm(h.depth), magnitude: parseMagnitude(h.magnitude) }
+      : null;
+    const usableHypocenter = hypocenter && hypocenter.latitude != null && hypocenter.longitude != null ? hypocenter : null;
+
     return {
       serial,
+      hypocenter: usableHypocenter,
+      isCancel: !!report.isCancel,
       issuedAtMs,
       issuedAtIso: issuedAtMs != null ? toJstIso(issuedAtMs) : null,
       issuedAtSource: source,
@@ -354,12 +389,13 @@ export function buildNormalizedEew(event: RawEvent, reports: RawReport[], fallba
       originTimeMs: origin ? origin.ms : null,
       originTimeIso: origin ? toJstIso(origin.ms) : null,
       originTimePrecision: origin ? origin.precision : null,
-      hypocenterName: event.hypocenterName || null,
+      hypocenterName: cleanName || null,
       latitude,
       longitude,
       depthKm: parseDepthKm(event.depth),
       magnitude: parseMagnitude(event.magnitude),
       observedMaxIntensityKey: intensityToKey(event.observedMaximumIntensity ?? undefined),
+      isCancelEvent,
     },
     reports: out,
     warnings,
