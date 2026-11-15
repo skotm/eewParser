@@ -413,6 +413,15 @@ function parseDetailDocument(doc: Document) {
     }
     notes.push("地震諸元は表のラベル・値対応から抽出できなかった項目がある可能性があります。");
   }
+  // 地震波検知時刻("地震波検知時刻 12時38分10.1秒")。報の「地震波検知からの経過時間」の基準で、
+  // MeteoQuakeのリプレイはここから始める。
+  {
+    const halfWidth = (value: string) => value.replace(/[０-９]/g, (digit) => String.fromCharCode(digit.charCodeAt(0) - 0xFEE0)).replace(/．/g, ".");
+    const detectionRegex = /地震波検知時刻[^\d]{0,6}(\d{1,2}時\d{1,2}分(?:\d+(?:\.\d+)?秒)?)/;
+    const fromRows = allRows.map((row) => halfWidth(row.cells.join(" ")).match(detectionRegex)?.[1]).find(Boolean);
+    const found = fromRows || halfWidth(clean(doc.body?.textContent || "")).match(detectionRegex)?.[1];
+    if (found) eventDetails.detectionTime = found;
+  }
   // 緯度・経度が表のラベルと値の対応から取れなかった(または数値にできない)時は、ページ内の
   // 「北緯◯度」「東経◯度」などの表記から探す。再生には震源の位置が必須のため。
   if (parseCoordinate(eventDetails.latitude) == null || parseCoordinate(eventDetails.longitude) == null) {
@@ -521,6 +530,7 @@ export default function App() {
       const eventForExport = {
         id: selected.id,
         occurredAt: parsed.eventDetails.occurredAt || selected.date,
+        detectionTime: parsed.eventDetails.detectionTime || null,
         hypocenterName: parsed.eventDetails.hypocenterName || selected.name,
         latitude: pickCoord(parsed.eventDetails.latitude, manualLat),
         longitude: pickCoord(parsed.eventDetails.longitude, manualLon),
@@ -539,7 +549,7 @@ export default function App() {
           indexUrl: INDEX_URL,
           detailUrl: selected.detailUrl,
           retrievedAt: new Date().toISOString(),
-          parserVersion: "0.4.1"
+          parserVersion: "0.4.2"
         },
         event: eventForExport,
         reports: parsed.reportGroups,

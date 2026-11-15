@@ -89,7 +89,8 @@ t("全体の組み立て(スキーマ例どおりの入力)", () => {
   assert.equal(out.reports[1].isFinal, true);
   assert.equal(out.reports[1].maxIntensityKey, "5+");
   assert.deepEqual(out.reports[0].longPeriod, [{ name: "茨城県南部", grade: 1 }]);
-  assert.deepEqual(out.warnings, ["地震発生時刻が分単位のため、秒以下は0として扱っています。"].slice(1));
+  // 検知時刻の無い入力なので、その旨の警告だけが出る
+  assert.deepEqual(out.warnings, ["地震波検知時刻を取り出せませんでした。リプレイは第1報の少し前から始まります。"]);
   assert.equal(eewFileName(out.event, "x"), "20260823_茨城県南部M5.9.eew.json");
 });
 t("欠落時は推測せず警告", () => {
@@ -139,5 +140,27 @@ t("気象庁の表の表記: 度°分′・和暦・キャンセル報", () => {
   assert.equal(out.reports[1].isCancel, true);
   assert.equal(out.reports[0].issuedAtIso, "2026-10-16T12:38:20+09:00");
   assert.equal(out.reports[0].maxIntensityKey, "7");
+});
+t("地震波検知時刻+経過秒で発表時刻を決める", () => {
+  const out = buildNormalizedEew(
+    { id: "e", occurredAt: "令和 8年10月16日12時38分", detectionTime: "12時38分10.1秒" },
+    [
+      { reportNumber: 1, elapsedSeconds: 3.9, providedAt: "12時38分14秒", forecastIntensityByArea: [{ area: "A", expectedMaximumIntensity: "4" }] },
+      { reportNumber: 2, elapsedSeconds: 4.9, providedAt: "12時38分15秒", forecastIntensityByArea: [{ area: "A", expectedMaximumIntensity: "5弱" }] },
+      { reportNumber: 3, elapsedSeconds: 30, providedAt: "12時38分15秒", forecastIntensityByArea: [] },
+    ],
+  );
+  assert.equal(out.event.detectionTimeIso, "2026-10-16T12:38:10.100+09:00");
+  assert.equal(out.reports[0].issuedAtIso, "2026-10-16T12:38:14+09:00");
+  assert.equal(out.reports[0].issuedAtSource, "detection+elapsed");
+  assert.equal(out.reports[1].issuedAtIso, "2026-10-16T12:38:15+09:00");
+  // 表の発表時刻と大きく食い違う報は、表の発表時刻を使って警告
+  assert.equal(out.reports[2].issuedAtSource, "providedAt");
+  assert.ok(out.warnings.some((w) => w.includes("第3報") && w.includes("ずれ")));
+  // 検知時刻が無ければ警告し、発表時刻の表を使う
+  const none = buildNormalizedEew({ id: "e", occurredAt: "令和 8年10月16日12時38分" }, [{ reportNumber: 1, elapsedSeconds: 3.9, providedAt: "12時38分14秒", forecastIntensityByArea: [{ area: "A", expectedMaximumIntensity: "4" }] }]);
+  assert.equal(none.event.detectionTimeMs, null);
+  assert.equal(none.reports[0].issuedAtSource, "providedAt");
+  assert.ok(none.warnings.some((w) => w.includes("地震波検知時刻")));
 });
 console.log(`${n} tests passed`);

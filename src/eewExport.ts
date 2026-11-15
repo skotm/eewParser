@@ -259,6 +259,8 @@ export type RawReport = {
 export type RawEvent = {
   id?: string;
   occurredAt?: string | null;
+  /** 地震波検知時刻("12時38分10.1秒")。報の「地震波検知からの経過時間」の基準になる。 */
+  detectionTime?: string | null;
   hypocenterName?: string | null;
   latitude?: string | number | null;
   longitude?: string | number | null;
@@ -271,8 +273,12 @@ export type NormalizedReport = {
   serial: number;
   issuedAtMs: number | null;
   issuedAtIso: string | null;
-  /** どの値から発表時刻を決めたか。providedAt=表の発表時刻、origin+elapsed=発生時刻+経過秒。 */
-  issuedAtSource: "providedAt" | "origin+elapsed" | null;
+  /**
+   * どの値から発表時刻を決めたか。
+   * detection+elapsed=地震波検知時刻+経過秒(0.1秒単位で最も正確)、providedAt=表の発表時刻(秒単位)、
+   * origin+elapsed=発生時刻+経過秒。
+   */
+  issuedAtSource: "detection+elapsed" | "providedAt" | "origin+elapsed" | null;
   elapsedSeconds: number | null;
   /** 最後の報を最終報として扱う(公開履歴には「最終」の明示が無いため)。 */
   isFinal: boolean;
@@ -292,6 +298,9 @@ export type NormalizedEew = {
     originTimeMs: number | null;
     originTimeIso: string | null;
     originTimePrecision: "second" | "minute" | null;
+    /** 地震波検知時刻(UTCミリ秒)。リプレイの開始位置に使う。取れなければnull。 */
+    detectionTimeMs: number | null;
+    detectionTimeIso: string | null;
     hypocenterName: string | null;
     latitude: number | null;
     longitude: number | null;
@@ -312,6 +321,12 @@ export function buildNormalizedEew(event: RawEvent, reports: RawReport[], fallba
   if (!origin) warnings.push("地震発生時刻を解釈できませんでした。報の絶対時刻は出力されません。");
   else if (origin.precision === "minute") warnings.push("地震発生時刻が分単位のため、秒以下は0として扱っています。");
 
+  // 地震波検知時刻。発生時刻と同じ日(JST)の時刻として絶対時刻にする。
+  const detectionClock = parseClockOfDay(event.detectionTime);
+  const detectionMs = origin && detectionClock != null ? Math.round(resolveIssuedAtMs(detectionClock, origin.ms)) : null;
+  if (event.detectionTime && detectionMs == null) warnings.push("地震波検知時刻を解釈できませんでした。");
+  if (!event.detectionTime) warnings.push("地震波検知時刻を取り出せませんでした。リプレイは第1報の少し前から始まります。");
+
   const latitude = parseCoordinate(event.latitude);
   const longitude = parseCoordinate(event.longitude);
   const rawName = typeof event.hypocenterName === "string" ? event.hypocenterName : "";
@@ -326,9 +341,17 @@ export function buildNormalizedEew(event: RawEvent, reports: RawReport[], fallba
     const elapsed = typeof report.elapsedSeconds === "number" && Number.isFinite(report.elapsedSeconds) ? report.elapsedSeconds : null;
     let issuedAtMs: number | null = null;
     let source: NormalizedReport["issuedAtSource"] = null;
-    if (origin && clock != null) {
-      issuedAtMs = resolveIssuedAtMs(clock, origin.ms);
+    const fromTable = origin && clock != null ? resolveIssuedAtMs(clock, origin.ms) : null;
+    // 「地震波検知からの経過時間」は0.1秒単位なので、地震波検知時刻+経過秒を優先する。表の発表時刻(秒単位)と
+    // 2秒を超えて食い違う時は、どちらかの読み違いを疑って、表の発表時刻を使い警告を出す。
+    const fromDetection = detectionMs != null && elapsed != null ? detectionMs + Math.round(elapsed * 1000) : null;
+    if (fromDetection != null && (fromTable == null || Math.abs(fromDetection - fromTable) <= 2000)) {
+      issuedAtMs = fromDetection;
+      source = "detection+elapsed";
+    } else if (fromTable != null) {
+      issuedAtMs = fromTable;
       source = "providedAt";
+      if (fromDetection != null) warnings.push(`第${report.reportNumber ?? index + 1}報: 地震波検知時刻+経過時間と表の発表時刻が2秒より大きくずれています。表の発表時刻を使いました。`);
     } else if (origin && elapsed != null) {
       issuedAtMs = origin.ms + elapsed * 1000;
       source = "origin+elapsed";
@@ -389,6 +412,8 @@ export function buildNormalizedEew(event: RawEvent, reports: RawReport[], fallba
       originTimeMs: origin ? origin.ms : null,
       originTimeIso: origin ? toJstIso(origin.ms) : null,
       originTimePrecision: origin ? origin.precision : null,
+      detectionTimeMs: detectionMs,
+      detectionTimeIso: detectionMs != null ? toJstIso(detectionMs) : null,
       hypocenterName: cleanName || null,
       latitude,
       longitude,
