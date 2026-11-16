@@ -272,6 +272,8 @@ export type RawReport = {
   isCancel?: boolean;
   elapsedSeconds?: number | null;
   providedAt?: string | null;
+  /** 予報区ごとの予測が無い初期の報の「最大震度1程度以上」のような一文。 */
+  provisionalIntensity?: string | null;
   forecastIntensityByArea?: Array<{ area?: string; expectedMaximumIntensity?: string }>;
   forecastLongPeriodByArea?: Array<{ area?: string; expectedLongPeriodClass?: number }>;
 };
@@ -303,6 +305,8 @@ export type NormalizedReport = {
   /** 最後の報を最終報として扱う(公開履歴には「最終」の明示が無いため)。 */
   isFinal: boolean;
   maxIntensityKey: IntensityKey | null;
+  /** 最大震度が「〜程度以上」としか分からない報(予報区ごとの予測が無い初期の報)か。 */
+  maxIntensityOpenEnded: boolean;
   /** その報の震源(数値)。無ければnull(その場合はevent側の震源を使う)。 */
   hypocenter: { latitude: number | null; longitude: number | null; depthKm: number | null; magnitude: number | null } | null;
   /** キャンセル報(取消)か。 */
@@ -390,7 +394,11 @@ export function buildNormalizedEew(event: RawEvent, reports: RawReport[], fallba
       .map((a) => ({ name: String(a.area), grade: Number(a.expectedLongPeriodClass) }));
 
     const serial = report.reportNumber ?? index + 1;
-    if (!areas.length) warnings.push(`第${serial}報: 予報区ごとの予想震度を取り出せませんでした。`);
+    // 予報区ごとの予測が無い初期の報は「最大震度N程度以上」の一文だけ。この場合は最大震度だけを持つ。
+    const provisionalKey = !areas.length && report.provisionalIntensity
+      ? parseIntensityRange(String(report.provisionalIntensity).replace(/最大/g, "")).maxKey
+      : null;
+    if (!areas.length && !provisionalKey && !report.isCancel) warnings.push(`第${serial}報: 予報区ごとの予想震度を取り出せませんでした。`);
     if (issuedAtMs == null) warnings.push(`第${serial}報: 発表時刻を決められませんでした。`);
 
     const h = report.hypocenter;
@@ -408,7 +416,8 @@ export function buildNormalizedEew(event: RawEvent, reports: RawReport[], fallba
       issuedAtSource: source,
       elapsedSeconds: elapsed,
       isFinal: index === sorted.length - 1,
-      maxIntensityKey: maxIntensityKey(areas.map((a) => a.maxIntensityKey)),
+      maxIntensityKey: maxIntensityKey(areas.map((a) => a.maxIntensityKey)) ?? provisionalKey,
+      maxIntensityOpenEnded: !areas.length && !!provisionalKey,
       areas,
       longPeriod,
     };

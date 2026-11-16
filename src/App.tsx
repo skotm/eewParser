@@ -259,6 +259,9 @@ function parseForecastBlocks(text: string) {
   return blocks;
 }
 
+// 「最大震度1程度以上」「最大震度５弱程度以上」(全角数字も可)。
+const PROVISIONAL_INTENSITY = /最大\s*震度\s*[0-7０-７](?:\s*[弱強])?\s*(?:程度以上|以上|程度)/;
+
 function parseReportGroups(rows: ParsedTableRow[], doc: Document) {
   const forecastBlocks = parseForecastBlocks(doc.body?.innerText || doc.body?.textContent || "");
   const isElapsedCell = (cell?: string) => !!cell && /^\d+(?:\.\d+)?$/.test(cell.replace(/[０-９]/g, (digit) => String.fromCharCode(digit.charCodeAt(0) - 0xFEE0)));
@@ -266,6 +269,8 @@ function parseReportGroups(rows: ParsedTableRow[], doc: Document) {
     const rowText = row.cells.join(" | ");
     if (!/\d{1,2}時\d{1,2}分/.test(rowText)) return false;
     if (/※\s*\d+/.test(rowText)) return true;
+    // 予報区ごとの予測が無い初期の報は、予測震度の欄が「最大震度1程度以上」のような一文になっている。
+    if (PROVISIONAL_INTENSITY.test(rowText) && isElapsedCell(row.cells[2])) return true;
     // 予測震度の注記(※)が無いキャンセル報の行。地震の概要の行などと区別するため、経過時間(秒)の列が数値の行に限る。
     return /キャンセル|取消/.test(rowText) && isElapsedCell(row.cells[2]);
   });
@@ -278,7 +283,8 @@ function parseReportGroups(rows: ParsedTableRow[], doc: Document) {
     const time = rowText.match(/\d{1,2}時\d{1,2}分(?:\d+(?:\.\d+)?秒)?/)?.[0] || null;
     // 震源要素(北緯・東経・深さ・マグニチュード)は、表の見出しの並び(経過時間→震源要素→予測震度)から、
     // 予測震度のセル(※を含むセル)の直前の4セルとみなす。緯度・経度として読めない時は取り出さない。
-    const markerCellIndex = row.cells.findIndex((cell) => /※\s*\d+/.test(cell));
+    const markerCellIndex = row.cells.findIndex((cell) => /※\s*\d+/.test(cell) || PROVISIONAL_INTENSITY.test(cell));
+    const provisional = row.cells.map((cell) => cell.match(PROVISIONAL_INTENSITY)?.[0]).find(Boolean) || null;
     let hypocenter: { latitude: string; longitude: string; depth: string; magnitude: string } | null = null;
     if (markerCellIndex >= 4) {
       const [latitude, longitude, depth, magnitude] = row.cells.slice(markerCellIndex - 4, markerCellIndex);
@@ -295,6 +301,7 @@ function parseReportGroups(rows: ParsedTableRow[], doc: Document) {
       hypocenter,
       isCancel: /キャンセル|取消/.test(rowText),
       forecastReference: marker ? "※" + marker : null,
+      provisionalIntensity: provisional ? provisional.replace(/\s+/g, "") : null,
       forecastIntensityByArea: forecastBlocks.get(marker)?.intensity || [],
       forecastLongPeriodByArea: forecastBlocks.get(marker)?.longPeriod || [],
       sourceTable: row.tableNumber,
@@ -550,7 +557,7 @@ export default function App() {
           indexUrl: INDEX_URL,
           detailUrl: selected.detailUrl,
           retrievedAt: new Date().toISOString(),
-          parserVersion: "0.4.3"
+          parserVersion: "0.4.4"
         },
         event: eventForExport,
         reports: parsed.reportGroups,

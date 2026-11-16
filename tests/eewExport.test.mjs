@@ -180,4 +180,23 @@ t("対象地域にページの案内文が混ざらない", () => {
   assert.deepEqual(out.reports[0].longPeriod, []);
   assert.ok(out.warnings.some((w) => w.includes("不自然")));
 });
+
+t("予報区ごとの予測が無い初期の報は、最大震度だけを持つ", () => {
+  const out = buildNormalizedEew(
+    { id: "e", occurredAt: "平成23年03月11日14時46分18.1秒", detectionTime: "14時46分40.2秒", latitude: "38°06.2′", longitude: "142°51.6′" },
+    [
+      { reportNumber: 1, elapsedSeconds: 5.4, providedAt: "14時46分45.6秒", provisionalIntensity: "最大震度1程度以上", hypocenter: { latitude: "38.2", longitude: "142.7", depth: "10km", magnitude: "4.3" } },
+      { reportNumber: 2, elapsedSeconds: 6.5, providedAt: "14時46分46.7秒", provisionalIntensity: "最大震度３程度以上" },
+      { reportNumber: 3, elapsedSeconds: 7.5, providedAt: "14時46分47.7秒", forecastIntensityByArea: [{ area: "宮城県中部", expectedMaximumIntensity: "4" }] },
+    ],
+  );
+  assert.equal(out.reports.length, 3);
+  assert.equal(out.reports[0].maxIntensityKey, "1");
+  assert.equal(out.reports[0].maxIntensityOpenEnded, true);
+  assert.equal(out.reports[0].areas.length, 0);
+  assert.equal(out.reports[0].hypocenter.magnitude, 4.3);
+  assert.equal(out.reports[1].maxIntensityKey, "3");
+  assert.equal(out.reports[2].maxIntensityOpenEnded, false);
+  assert.equal(out.warnings.some((w) => /第1報|第2報/.test(w) && /取り出せません/.test(w)), false);
+});
 console.log(`${n} tests passed`);
