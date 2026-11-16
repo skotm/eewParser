@@ -557,7 +557,7 @@ export default function App() {
           indexUrl: INDEX_URL,
           detailUrl: selected.detailUrl,
           retrievedAt: new Date().toISOString(),
-          parserVersion: "0.4.4"
+          parserVersion: "0.5.0"
         },
         event: eventForExport,
         reports: parsed.reportGroups,
@@ -610,76 +610,97 @@ export default function App() {
     URL.revokeObjectURL(url);
   }
 
-  return <main className="shell">
-    <header className="topbar">
-      <div className="logo">EEW</div><div><p className="eyebrow">JMA EEW WARNING JSON CONVERTER</p><h1>JmaEewParser</h1></div>
-      <span className="top-status">BROWSER WORKSPACE</span>
-    </header>
-    <section className="intro">
-      <div><p className="eyebrow">EVENT LIBRARY</p><h2>再生する地震を選択</h2>
-        <p>気象庁の緊急地震速報（警報）公開履歴から事例を読み込み、JSONに変換します。</p></div>
-      <div className="intro-links"><a href="./replay.html">EEW再生 ↗</a><a href="./schema.html">JSON仕様を見る ↗</a><a href={INDEX_URL} target="_blank" rel="noreferrer">気象庁の公開履歴 ↗</a></div>
-    </section>
+  const detailReady = !!(jsonText && parsedDetail && selected && parsedDetail.selectedId === selected.id);
 
-    <section className="panel import-panel">
-      <div className="panel-title"><div><p className="eyebrow">DATA SOURCE</p><h3>公開履歴を取り込む</h3></div><span className="tag">警報のみ</span></div>
-      <label className="label" htmlFor="index-url">一覧ページURL</label>
-      <div className="url-row"><input id="index-url" value={indexUrl} onChange={(e) => setIndexUrl(e.target.value)} />
-        <button className="primary" disabled={busy} onClick={loadIndex}>{busy ? "処理中…" : "URLから読み込む"}</button></div>
-      <div className="fallback"><div><b>直接取得できない場合</b><p>一覧ページをHTMLとして保存して読み込むと、ブラウザ内で解析できます。</p></div>
-        <label className="secondary file-button">HTMLを選択<input type="file" accept=".html,.htm,text/html" onChange={importIndexFile} /></label></div>
-      <p className="status">{status}</p>{error && <p className="error" role="alert">{error}</p>}
-      {indexDiagnostics && <details className="note"><summary>HTML解析診断（調査用）</summary><pre>{JSON.stringify(indexDiagnostics, null, 2)}</pre></details>}
-    </section>
+  return <div className="page">
+    <h1>JmaEewParser</h1>
+    <div className="subtitle">
+      気象庁の緊急地震速報(警報)の公開履歴から、MeteoQuakeで再生できるEEWファイル(.eew.json)を作ります。
+      すべての処理はこのブラウザ内で完結します。対象は警報が発表された事例のみで、予報だけの事例は含まれません。
+    </div>
 
-    <section className="workspace">
-      <aside className="panel catalog">
-        <div className="panel-title"><div><p className="eyebrow">CATALOG</p><h3>事例一覧 <span className="count">{visibleEvents.length}</span></h3></div></div>
-        <input className="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="震央地名・日時・規模で検索" />
-        <div className="filters">{([{ value: "all", label: "すべて" }, { value: "new", label: "2023年以降" }, { value: "old", label: "2023年以前" }] as const).map((item) =>
-          <button key={item.value} className={period === item.value ? "filter active" : "filter"} onClick={() => setPeriod(item.value)}>{item.label}</button>)}</div>
-        {visibleEvents.length ? <div className="event-list">{visibleEvents.map((item) =>
-          <button key={item.id} className={selectedId === item.id ? "event selected" : "event"} onClick={() => { setSelectedId(item.id); setJsonText(""); setExportWarnings([]); setParsedDetail(null); }}>
-            <div className="event-meta"><span>{formatDate(item.date)}</span><span>M {item.magnitude || "—"}</span></div>
-            <strong>{item.name}</strong><div className="event-bottom"><span>観測最大震度</span><b>{item.intensity || "未掲載"}</b></div>
-          </button>)}</div> : <div className="empty"><strong>{events.length ? "一致する事例がありません" : "事例データがありません"}</strong><p>{events.length ? "検索語や期間フィルターを変更してください。" : "気象庁の一覧を読み込むか、保存したHTMLを選択してください。"}</p></div>}
-        <div className="catalog-footer">気象庁が公開する警報発表事例のみ</div>
-      </aside>
+    <div className="card">
+      <h2>1. 公開履歴を取り込む</h2>
+      <label htmlFor="index-url">一覧ページのURL</label>
+      <input type="text" id="index-url" value={indexUrl} onChange={(e) => setIndexUrl(e.target.value)} />
+      <div className="row buttons">
+        <button disabled={busy} onClick={loadIndex}>{busy ? "処理中…" : "URLから読み込む"}</button>
+        <label className="button secondary">一覧のHTMLを選択<input type="file" accept=".html,.htm,text/html" onChange={importIndexFile} /></label>
+      </div>
+      <div className="small-note">
+        ブラウザから直接取得できない場合は、一覧ページ(<a href={INDEX_URL} target="_blank" rel="noreferrer">気象庁の公開履歴</a>)を
+        HTMLとして保存して読み込んでください。
+      </div>
+      <div className="status">{status}</div>
+      {error && <div className="error" role="alert">{error}</div>}
+      {indexDiagnostics && <details><summary>HTML解析の診断(調査用)</summary><pre>{JSON.stringify(indexDiagnostics, null, 2)}</pre></details>}
+    </div>
 
-      <section className="panel details">
-        <div className="panel-title"><div><p className="eyebrow">SELECTED EVENT</p><h3>選択中の事例</h3></div>{selected && <span className="tag">JMA HISTORY</span>}</div>
-        {selected ? <>
-          <div className="selected-card"><span className="date">{formatDate(selected.date)}</span><h2>{selected.name}</h2><p>緊急地震速報（警報）公開履歴の事例</p>
-            <div className="stats"><div><span>マグニチュード</span><b>{selected.magnitude ? "M " + selected.magnitude : "—"}</b></div><div><span>観測最大震度</span><b>{selected.intensity || "未掲載"}</b></div></div>
-          </div>
-          <div className="actions"><button className="primary" disabled={busy} onClick={() => importDetail()}>{busy ? "処理中…" : "詳細ページを解析"}</button>
-            <label className="secondary file-button">詳細HTMLを選択<input type="file" accept=".html,.htm,text/html" onChange={(e) => { const file = e.target.files?.[0]; if (file) void importDetail(file); e.target.value = ""; }} /></label>
-            <a href={selected.detailUrl} target="_blank" rel="noreferrer">公開ページを開く ↗</a></div>
-          <div className="note">解析後の表行は、JSONプレビューで確認してください。予想震度は各報ごとにまとめ、元表もJSONに保持します。解析結果は公式ページと照合してください。</div>
-        </> : <div className="empty"><strong>事例を選択してください</strong><p>左側の一覧から対象を選びます。</p></div>}
-        {jsonText && parsedDetail && selected && parsedDetail.selectedId === selected.id && (() => {
-          const d = parsedDetail.parsed.eventDetails;
-          const missing = parseCoordinate(d.latitude) == null || parseCoordinate(d.longitude) == null;
-          const coordRows = parsedDetail.parsed.reports.filter((row) => row.cells.some((cell) => /緯|経|北|東/.test(cell))).slice(0, 12);
-          return <>
-            {missing && <div className="note" role="alert">
-              <b>震源の緯度・経度を取得できませんでした</b>
-              <p>このままではMeteoQuakeで再生できません。公式ページを見て、緯度・経度を数値(度)で入力してください。</p>
-              <div className="url-row">
-                <input aria-label="緯度" placeholder="緯度 例: 36.1" value={manualLat} onChange={(e) => setManualLat(e.target.value)} />
-                <input aria-label="経度" placeholder="経度 例: 139.9" value={manualLon} onChange={(e) => setManualLon(e.target.value)} />
-                <button className="primary" onClick={() => buildExport(parsedDetail.parsed, selected, manualLat, manualLon)}>反映</button>
-              </div>
-            </div>}
-            <details className="note"><summary>諸元の抽出診断(緯度・経度が取れない時の調査用)</summary>
-              <pre>{JSON.stringify({ eventDetails: d, 緯度経度らしいセルを含む行: coordRows.map((row) => ({ table: row.tableNumber, row: row.rowNumber, cells: row.cells })) }, null, 2)}</pre>
-            </details>
-          </>;
-        })()}
-        {jsonText && exportWarnings.length > 0 && <div className="note" role="alert"><b>確認が必要な点({exportWarnings.length}件)</b><ul>{exportWarnings.map((w, i) => <li key={i}>{w}</li>)}</ul></div>}
-        {jsonText && <div className="json-preview"><div className="json-title"><div><p className="eyebrow">JSON PREVIEW</p><h3>変換結果</h3></div><button className="primary" onClick={downloadJson}>MeteoQuake用 .eew.json を保存 ↓</button></div><pre>{jsonText}</pre></div>}
-      </section>
-    </section>
-    <footer><span>JmaEewParser · v0.2.0</span><span>過去事例の閲覧・分析用。現在の防災情報には使用しないでください。</span></footer>
-  </main>;
+    <div className="card">
+      <h2>2. 事例を選ぶ{events.length > 0 && <span className="count">{visibleEvents.length}件</span>}</h2>
+      <input type="text" value={query} onChange={(e) => setQuery(e.target.value)} placeholder="震央地名・日時・規模で検索" />
+      <div className="mode-switch">
+        {([{ value: "all", label: "すべて" }, { value: "new", label: "2023年以降" }, { value: "old", label: "2023年より前" }] as const).map((item) =>
+          <label key={item.value}><input type="radio" name="period" checked={period === item.value} onChange={() => setPeriod(item.value)} />{item.label}</label>)}
+      </div>
+      {visibleEvents.length ? <div className="event-list">{visibleEvents.map((item) =>
+        <button key={item.id} className={selectedId === item.id ? "event selected" : "event"}
+          onClick={() => { setSelectedId(item.id); setJsonText(""); setExportWarnings([]); setParsedDetail(null); }}>
+          <span className="event-date">{formatDate(item.date)}</span>
+          <span className="event-name">{item.name}</span>
+          <span className="event-info">M{item.magnitude || "—"} ・ 最大震度 {item.intensity || "—"}</span>
+        </button>)}</div>
+        : <div className="small-note">{events.length ? "一致する事例がありません。検索語や期間を変えてください。" : "事例がまだ読み込まれていません。"}</div>}
+    </div>
+
+    <div className="card">
+      <h2>3. 解析して保存</h2>
+      {selected ? <>
+        <div className="picked">
+          <b>{selected.name}</b>
+          <span>{formatDate(selected.date)} ・ M{selected.magnitude || "—"} ・ 最大震度 {selected.intensity || "—"}</span>
+        </div>
+        <div className="row buttons">
+          <button disabled={busy} onClick={() => importDetail()}>{busy ? "処理中…" : "詳細ページを解析"}</button>
+          <label className="button secondary">詳細のHTMLを選択<input type="file" accept=".html,.htm,text/html" onChange={(e) => { const file = e.target.files?.[0]; if (file) void importDetail(file); e.target.value = ""; }} /></label>
+        </div>
+        <div className="small-note">
+          <a href={selected.detailUrl} target="_blank" rel="noreferrer">公開ページを開く</a>。
+          解析結果は、公式ページと照合してから使ってください。抽出できない項目は推測せず、元の表もJSONに残します。
+        </div>
+      </> : <div className="small-note">上の一覧から事例を選んでください。</div>}
+
+      {detailReady && (() => {
+        const d = parsedDetail!.parsed.eventDetails;
+        const missing = parseCoordinate(d.latitude) == null || parseCoordinate(d.longitude) == null;
+        const coordRows = parsedDetail!.parsed.reports.filter((row) => row.cells.some((cell) => /緯|経|北|東/.test(cell))).slice(0, 12);
+        return <>
+          {missing && <div className="warn" role="alert">
+            <b>震源の緯度・経度を取得できませんでした</b>
+            <div className="small-note">このままではMeteoQuakeで再生できません。公式ページを見て、緯度・経度を数値(度)で入力してください。</div>
+            <div className="row">
+              <div><input type="text" aria-label="緯度" placeholder="緯度 例: 36.1" value={manualLat} onChange={(e) => setManualLat(e.target.value)} /></div>
+              <div><input type="text" aria-label="経度" placeholder="経度 例: 139.9" value={manualLon} onChange={(e) => setManualLon(e.target.value)} /></div>
+              <button onClick={() => buildExport(parsedDetail!.parsed, selected!, manualLat, manualLon)}>反映</button>
+            </div>
+          </div>}
+          <details><summary>諸元の抽出の診断(調査用)</summary>
+            <pre>{JSON.stringify({ eventDetails: d, 緯度経度らしいセルを含む行: coordRows.map((row) => ({ table: row.tableNumber, row: row.rowNumber, cells: row.cells })) }, null, 2)}</pre>
+          </details>
+        </>;
+      })()}
+
+      {jsonText && exportWarnings.length > 0 && <div className="warn" role="alert">
+        <b>確認が必要な点({exportWarnings.length}件)</b>
+        <ul>{exportWarnings.map((w, i) => <li key={i}>{w}</li>)}</ul>
+      </div>}
+
+      {jsonText && <>
+        <div className="row buttons"><button onClick={downloadJson}>{exportName || ".eew.json"} を保存</button></div>
+        <details><summary>変換結果(JSON)を見る</summary><pre>{jsonText}</pre></details>
+      </>}
+    </div>
+
+    <div className="small-note footer">過去事例の閲覧・分析用です。現在の防災情報には使用しないでください。</div>
+  </div>;
 }

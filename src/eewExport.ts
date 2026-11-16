@@ -6,7 +6,7 @@
  * DOMに依存しないので、Node単体でテストできる(tests/eewExport.test.mjs)。
  *
  * 出力は JSON の `normalized` に入れる。従来のフィールド(event / reports /
- * sourceTables)は変えず追加するだけなので、既存のEEW再生ページ(replay.html)や
+ * sourceTables)は変えず追加するだけなので、既存の取り込み先や
  * 古いJSONとの互換性は保たれる。
  *
  * 震度キーはMeteoQuakeの内部表記に合わせる: "0"〜"4", "5-"(5弱), "5+"(5強),
