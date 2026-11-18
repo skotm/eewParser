@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import {
   parseCoordinate, parseDepthKm, parseMagnitude, intensityToKey, parseIntensityRange,
-  parseOriginTime, parseClockOfDay, extractHypocenterFromText, isPlausibleAreaName, cutAtPageFooter, resolveIssuedAtMs, toJstIso, buildNormalizedEew, eewFileName,
+  parseOriginTime, parseClockOfDay, extractHypocenterFromText, isPlausibleAreaName, cutAtPageFooter, resolveIssuedAtMs, toJstIso, buildNormalizedEew, eewFileName, isOriginMinutePrecision,
 } from "../src/eewExport.ts";
 
 let n = 0;
@@ -198,5 +198,18 @@ t("予報区ごとの予測が無い初期の報は、最大震度だけを持�
   assert.equal(out.reports[1].maxIntensityKey, "3");
   assert.equal(out.reports[2].maxIntensityOpenEnded, false);
   assert.equal(out.warnings.some((w) => /第1報|第2報/.test(w) && /取り出せません/.test(w)), false);
+});
+t("分単位の発生時刻に秒を指定できる", () => {
+  const ev = { id: "x", occurredAt: "2026-08-23 02:00", detectionTime: "02時00分10秒", hypocenterName: "A", latitude: "36.1", longitude: "139.9", depth: "10km", magnitude: "5.0", observedMaximumIntensity: "4" };
+  assert.equal(isOriginMinutePrecision(ev), true);
+  assert.equal(isOriginMinutePrecision({ occurredAt: "2026-08-23 02:00:12" }), false);
+  const a = buildNormalizedEew(ev, [], null);
+  const b = buildNormalizedEew(ev, [], null, 47.5);
+  assert.equal(b.event.originTimeMs - a.event.originTimeMs, 47500);
+  assert.ok(b.warnings.some((w) => w.includes("手入力")));
+  const c = buildNormalizedEew(ev, [], null, 75);
+  assert.equal(c.event.originTimeMs, a.event.originTimeMs);
+  const d = buildNormalizedEew({ ...ev, occurredAt: "2026-08-23 02:00:12" }, [], null, 30);
+  assert.equal(d.event.originTimeMs - a.event.originTimeMs, 12000);
 });
 console.log(`${n} tests passed`);

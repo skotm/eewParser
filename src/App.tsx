@@ -1,5 +1,5 @@
 import { ChangeEvent, useMemo, useState } from "react";
-import { buildNormalizedEew, cutAtPageFooter, eewFileName, extractHypocenterFromText, isPlausibleAreaName, parseCoordinate } from "./eewExport";
+import { buildNormalizedEew, cutAtPageFooter, eewFileName, extractHypocenterFromText, isOriginMinutePrecision, isPlausibleAreaName, parseCoordinate } from "./eewExport";
 
 type Period = "all" | "new" | "old";
 type EventItem = {
@@ -474,6 +474,7 @@ export default function App() {
   const [parsedDetail, setParsedDetail] = useState<{ parsed: ParsedDetail; selectedId: string } | null>(null);
   const [manualLat, setManualLat] = useState("");
   const [manualLon, setManualLon] = useState("");
+  const [originSecText, setOriginSecText] = useState("");
   const [indexDiagnostics, setIndexDiagnostics] = useState<Record<string, unknown> | null>(null);
 
   const visibleEvents = useMemo(() => events.filter((event) => {
@@ -530,7 +531,7 @@ export default function App() {
 
   // 解析結果(parsed)から、保存用のJSON・ファイル名・警告を組み立てる。
   // 緯度・経度が取れなかった場合は、手入力の値(manualLat / manualLon)で補う。
-  function buildExport(parsed: ParsedDetail, selected: EventItem, manualLat: string, manualLon: string) {
+  function buildExport(parsed: ParsedDetail, selected: EventItem, manualLat: string, manualLon: string, originSecText = "") {
     const pickCoord = (parsedValue: string | undefined, manual: string) =>
       parseCoordinate(parsedValue) == null && manual.trim() ? manual.trim() : (parsedValue || null);
       // MeteoQuakeで再生するための正規化済みデータ(数値・絶対時刻・震度キー)。
@@ -546,7 +547,8 @@ export default function App() {
         magnitude: parsed.eventDetails.magnitude || selected.magnitude || null,
         observedMaximumIntensity: parsed.eventDetails.observedMaximumIntensity || selected.intensity || null
       };
-      const normalized = buildNormalizedEew(eventForExport, parsed.reportGroups, selected.date);
+      const secNum = originSecText.trim() === "" ? null : Number(originSecText);
+      const normalized = buildNormalizedEew(eventForExport, parsed.reportGroups, selected.date, secNum);
       setExportName(eewFileName(normalized.event, selected.id));
       const manualUsed = (manualLat && parseCoordinate(parsed.eventDetails.latitude) == null) || (manualLon && parseCoordinate(parsed.eventDetails.longitude) == null);
       setExportWarnings(manualUsed ? ["震源の緯度・経度は手入力の値です。公式ページと照合してください。", ...normalized.warnings] : normalized.warnings);
@@ -593,8 +595,8 @@ export default function App() {
       const doc = new DOMParser().parseFromString(html, "text/html");
       const parsed = parseDetailDocument(doc);
       setParsedDetail({ parsed, selectedId: selected.id });
-      setManualLat(""); setManualLon("");
-      buildExport(parsed, selected, "", "");
+      setManualLat(""); setManualLon(""); setOriginSecText("");
+      buildExport(parsed, selected, "", "", "");
       setStatus("地震諸元と報ごとの予想震度を解析しました。抽出できない項目は推測せず、元表も保持しています。");
     } catch (cause) {
       setError((cause instanceof Error ? cause.message : "詳細ページを取得できませんでした。") +
@@ -681,7 +683,15 @@ export default function App() {
             <div className="row">
               <div><input type="text" aria-label="緯度" placeholder="緯度 例: 36.1" value={manualLat} onChange={(e) => setManualLat(e.target.value)} /></div>
               <div><input type="text" aria-label="経度" placeholder="経度 例: 139.9" value={manualLon} onChange={(e) => setManualLon(e.target.value)} /></div>
-              <button onClick={() => buildExport(parsedDetail!.parsed, selected!, manualLat, manualLon)}>反映</button>
+              <button onClick={() => buildExport(parsedDetail!.parsed, selected!, manualLat, manualLon, originSecText)}>反映</button>
+            </div>
+          </div>}
+          {isOriginMinutePrecision({ occurredAt: d.occurredAt }, selected?.date) && <div className="warn">
+            <b>地震発生時刻が分単位です</b>
+            <div className="small-note">秒を指定すると、報の絶対時刻などの基準に使います(空欄は0秒)。0以上60未満、小数可。</div>
+            <div className="row">
+              <div><input type="text" inputMode="decimal" aria-label="地震発生時刻の秒" placeholder="秒 例: 47.5" value={originSecText} onChange={(e) => setOriginSecText(e.target.value)} /></div>
+              <button onClick={() => buildExport(parsedDetail!.parsed, selected!, manualLat, manualLon, originSecText)}>反映</button>
             </div>
           </div>}
           <details><summary>諸元の抽出の診断(調査用)</summary>

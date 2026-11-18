@@ -338,12 +338,27 @@ export type NormalizedEew = {
   warnings: string[];
 };
 
-export function buildNormalizedEew(event: RawEvent, reports: RawReport[], fallbackOriginText?: string | null): NormalizedEew {
+/** 地震発生時刻が分単位(秒が無い)か。使用者が秒を指定できるかの判定に使う。 */
+export function isOriginMinutePrecision(event: { occurredAt?: unknown }, fallbackOriginText?: string | null): boolean {
+  const o = parseOriginTime(event.occurredAt) || parseOriginTime(fallbackOriginText);
+  return o != null && o.precision === "minute";
+}
+
+/**
+ * originSeconds: 発生時刻が分単位の時に、使用者が指定する秒(0以上60未満、小数可)。
+ * 秒が分かっている発生時刻には適用しない。
+ */
+export function buildNormalizedEew(event: RawEvent, reports: RawReport[], fallbackOriginText?: string | null, originSeconds?: number | null): NormalizedEew {
   const warnings: string[] = [];
 
-  const origin = parseOriginTime(event.occurredAt) || parseOriginTime(fallbackOriginText);
+  let origin = parseOriginTime(event.occurredAt) || parseOriginTime(fallbackOriginText);
   if (!origin) warnings.push("地震発生時刻を解釈できませんでした。報の絶対時刻は出力されません。");
-  else if (origin.precision === "minute") warnings.push("地震発生時刻が分単位のため、秒以下は0として扱っています。");
+  else if (origin.precision === "minute") {
+    if (originSeconds != null && Number.isFinite(originSeconds) && originSeconds >= 0 && originSeconds < 60) {
+      origin = { ms: origin.ms + Math.round(originSeconds * 1000), precision: "minute" };
+      warnings.push(`地震発生時刻は分単位のため、秒(${originSeconds}秒)は手入力の値です。`);
+    } else warnings.push("地震発生時刻が分単位のため、秒以下は0として扱っています。");
+  }
 
   // 地震波検知時刻。発生時刻と同じ日(JST)の時刻として絶対時刻にする。
   const detectionClock = parseClockOfDay(event.detectionTime);
